@@ -9,15 +9,13 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
   const [rate, setRate] = useState<number>(0.95);
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  // Silent audio to keep the browser alive on mobile
-  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
+  
+  // Timer for Android 15-second TTS bug workaround
+  const keepAliveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       synthRef.current = window.speechSynthesis;
-      // 1-sample minimal silent wav file
-      silentAudioRef.current = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
-      silentAudioRef.current.loop = true;
     }
   }, []);
 
@@ -27,9 +25,10 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
       setIsPlaying(false);
       setIsPaused(false);
       // DO NOT reset activeIndex here, so user can resume exactly where they left off!
-      if (silentAudioRef.current) {
-          silentAudioRef.current.pause();
-      }
+      const audioEl = document.getElementById('silentAudio') as HTMLAudioElement;
+      if (audioEl) audioEl.pause();
+      
+      if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current);
     }
   }, []);
 
@@ -67,13 +66,15 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
       }
 
       synthRef.current.cancel();
+      if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current);
       
       const playNext = (index: number) => {
         if (index >= paragraphs.length) {
           setIsPlaying(false);
           // Only clear index at the very end of the chapter
           setActiveIndex(-1);
-          if (silentAudioRef.current) silentAudioRef.current.pause();
+          const audioEl = document.getElementById('silentAudio') as HTMLAudioElement;
+          if (audioEl) audioEl.pause();
           return;
         }
 
@@ -107,7 +108,9 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
           console.error("Speech Synthesis Error:", e);
           // Do not fully stop the UI so the user can hit 'resume' easily from the last activeIndex
           setIsPlaying(false);
-          if (silentAudioRef.current) silentAudioRef.current.pause();
+          const audioEl = document.getElementById('silentAudio') as HTMLAudioElement;
+          if (audioEl) audioEl.pause();
+          if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current);
         };
 
         utteranceRef.current = utterance;
@@ -127,9 +130,19 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
       setIsPaused(false);
       
       // Start the heavy hack: Play silent audio so mobile OS thinks music is running
-      if (silentAudioRef.current) {
-          silentAudioRef.current.play().catch(e => console.warn('Silent audio play blocked:', e));
+      // Needs to be targeted by ID since it's in the DOM
+      const audioEl = document.getElementById('silentAudio') as HTMLAudioElement;
+      if (audioEl) {
+          audioEl.play().catch(e => console.warn('Silent audio play blocked:', e));
       }
+
+      // Android 15-second TTS bug heartbeat
+      keepAliveTimerRef.current = setInterval(() => {
+          if (synthRef.current && (synthRef.current.speaking || synthRef.current.paused)) {
+              synthRef.current.pause();
+              synthRef.current.resume();
+          }
+      }, 14000);
 
       playNext(startIndex);
     },
@@ -140,7 +153,8 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
     if (synthRef.current) {
       synthRef.current.pause();
       setIsPaused(true);
-      if (silentAudioRef.current) silentAudioRef.current.pause();
+      const audioEl = document.getElementById('silentAudio') as HTMLAudioElement;
+      if (audioEl) audioEl.pause();
     }
   }, []);
 
@@ -148,7 +162,8 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
     if (synthRef.current) {
       synthRef.current.resume();
       setIsPaused(false);
-      if (silentAudioRef.current) silentAudioRef.current.play().catch(() => {});
+      const audioEl = document.getElementById('silentAudio') as HTMLAudioElement;
+      if (audioEl) audioEl.play().catch(() => {});
     }
   }, []);
 

@@ -328,6 +328,8 @@ export default function Reader() {
         activeChapterId={activeChapter?.id} 
       />
 
+      {/* Hidden Audio for Mobile Background Playback Hack */}
+      <audio id="silentAudio" src="/silent.mp3" loop playsInline preload="auto" style={{ display: 'none' }} />
     </div>
   );
 }
