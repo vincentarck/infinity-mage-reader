@@ -9,10 +9,15 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
   const [rate, setRate] = useState<number>(0.95);
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  // Silent audio to keep the browser alive on mobile
+  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       synthRef.current = window.speechSynthesis;
+      // 1-sample minimal silent wav file
+      silentAudioRef.current = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
+      silentAudioRef.current.loop = true;
     }
   }, []);
 
@@ -21,7 +26,10 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
       synthRef.current.cancel();
       setIsPlaying(false);
       setIsPaused(false);
-      setActiveIndex(-1);
+      // DO NOT reset activeIndex here, so user can resume exactly where they left off!
+      if (silentAudioRef.current) {
+          silentAudioRef.current.pause();
+      }
     }
   }, []);
 
@@ -63,7 +71,9 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
       const playNext = (index: number) => {
         if (index >= paragraphs.length) {
           setIsPlaying(false);
+          // Only clear index at the very end of the chapter
           setActiveIndex(-1);
+          if (silentAudioRef.current) silentAudioRef.current.pause();
           return;
         }
 
@@ -95,15 +105,32 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
         
         utterance.onerror = (e) => {
           console.error("Speech Synthesis Error:", e);
+          // Do not fully stop the UI so the user can hit 'resume' easily from the last activeIndex
           setIsPlaying(false);
+          if (silentAudioRef.current) silentAudioRef.current.pause();
         };
 
         utteranceRef.current = utterance;
         synthRef.current?.speak(utterance);
+        
+        // Update Media Session for Lock Screen controls
+        if ('mediaSession' in navigator) {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: `Paragraf ${index + 1}`,
+                artist: 'Infinity Mage',
+                album: 'Chapter Audio',
+            });
+        }
       };
 
       setIsPlaying(true);
       setIsPaused(false);
+      
+      // Start the heavy hack: Play silent audio so mobile OS thinks music is running
+      if (silentAudioRef.current) {
+          silentAudioRef.current.play().catch(e => console.warn('Silent audio play blocked:', e));
+      }
+
       playNext(startIndex);
     },
     [paragraphs, rate]
@@ -113,6 +140,7 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
     if (synthRef.current) {
       synthRef.current.pause();
       setIsPaused(true);
+      if (silentAudioRef.current) silentAudioRef.current.pause();
     }
   }, []);
 
@@ -120,6 +148,7 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
     if (synthRef.current) {
       synthRef.current.resume();
       setIsPaused(false);
+      if (silentAudioRef.current) silentAudioRef.current.play().catch(() => {});
     }
   }, []);
 
@@ -131,10 +160,23 @@ export function useTTS(paragraphs: { idId: string; en: string; id: string }[], a
               pause();
           }
       } else {
-          // Play from paragraph currently in view, or start from 0
-          play(0);
+          // Play from the previously saved active paragraph, or start from 0 if none
+          play(activeIndex !== -1 ? activeIndex : 0);
       }
-  }, [isPlaying, isPaused, play, pause, resume]);
+  }, [isPlaying, isPaused, play, pause, resume, activeIndex]);
+
+  // Handle MediaSession action handlers
+  useEffect(() => {
+      if ('mediaSession' in navigator) {
+          navigator.mediaSession.setActionHandler('play', () => toggleStatus());
+          navigator.mediaSession.setActionHandler('pause', () => toggleStatus());
+          
+          return () => {
+              navigator.mediaSession.setActionHandler('play', null);
+              navigator.mediaSession.setActionHandler('pause', null);
+          }
+      }
+  }, [toggleStatus]);
 
   return {
     isPlaying,
